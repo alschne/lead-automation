@@ -1,0 +1,44 @@
+# Environment variables — NEVER commit this
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Test output / scratch files
+*.csv
+*.json
+!sample_apollo_export.json
+
+# Google credentials (if ever downloaded locally)
+*.json
+!sample_apollo_export.json
+service_account*.json
+credentials*.json
