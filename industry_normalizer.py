@@ -188,6 +188,49 @@ INDUSTRY_MAP: dict[str, list[str]] = {
         "charity",
         "ngo",
     ],
+    "artificial intelligence": [
+        "artificial intelligence",
+        "ai",
+        "machine learning",
+        "ml",
+        "generative ai",
+        "computer vision",
+    ],
+    "manufacturing": [
+        "manufacturing",
+        "industrial manufacturing",
+        "contract manufacturing",
+    ],
+    "automotive": [
+        "automotive",
+        "automotive marketplace",
+        "automotive technology",
+        "auto tech",
+    ],
+    "gambling": [
+        "gambling",
+        "online betting",
+        "sports betting",
+        "gaming",
+    ],
+    "location services": [
+        "location platform",
+        "location services",
+        "geolocation",
+        "mapping",
+    ],
+    "social media": [
+        "social network",
+        "social media",
+        "social platform",
+    ],
+    "smart home": [
+        "smart home",
+        "smart home technology",
+        "home automation",
+        "iot",
+        "internet of things",
+    ],
 }
 
 

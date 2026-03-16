@@ -77,37 +77,56 @@ def _get_gemini_client():
 # Pipeline
 # ---------------------------------------------------------------------------
 
-def _infer_industry(company: str, domain: str, gemini_client) -> str:
+def _batch_infer_industries(
+    companies: list[tuple[str, str]],
+    gemini_client,
+) -> list[str]:
     """
-    Infer industry from company name and domain using Gemini.
-    Falls back to empty string if Gemini is unavailable.
+    Infer industries for a list of (company, domain) tuples in one Gemini call.
+    Returns a list of industry strings in the same order as input.
+    Falls back to empty strings if Gemini is unavailable.
     """
-    if not gemini_client:
-        return ""
-    if not company and not domain:
-        return ""
+    import json
+    import re
+    from industry_normalizer import normalize_industry
+
+    if not gemini_client or not companies:
+        return [""] * len(companies)
+
+    company_lines = "\n".join(
+        f"{i+1}. Company: {company}, Domain: {domain}"
+        for i, (company, domain) in enumerate(companies)
+    )
+
+    prompt = (
+        f"For each company below, determine what industry they are in.\n\n"
+        f"{company_lines}\n\n"
+        f"Reply ONLY with a JSON array of objects in this exact format, one per company, in the same order:\n"
+        f'[{{"index": 1, "industry": "software"}}, {{"index": 2, "industry": "fintech"}}]\n\n'
+        f"Rules: lowercase only, 1-4 words, plain English. "
+        f"Examples: software, it services, legal services, cybersecurity, consulting, marketing, fintech. "
+        f"No explanation, no markdown, no code fences. Just the raw JSON array."
+    )
+
     try:
-        prompt = (
-            f"What industry is this company in?\n"
-            f"Company: {company}\n"
-            f"Domain: {domain}\n\n"
-            f"Reply with ONLY a short lowercase label (1-4 words) "
-            f"that a human would say in conversation. "
-            f"Examples: 'software', 'it services', 'legal services', "
-            f"'cybersecurity', 'consulting', 'marketing', 'fintech'. "
-            f"No explanation, no punctuation, just the label."
-        )
         model    = gemini_client.GenerativeModel("gemini-flash-latest")
         response = model.generate_content(prompt)
-        result   = response.text.strip().lower()
-        if result and len(result.split()) <= 4 and len(result) < 40:
-            return result
-        return ""
+        raw      = response.text.strip()
+        raw      = re.sub(r"```json|```", "", raw).strip()
+        results  = json.loads(raw)
+
+        output = [""] * len(companies)
+        for item in results:
+            idx      = item.get("index", 0) - 1
+            industry = item.get("industry", "").strip().lower()
+            if 0 <= idx < len(companies):
+                normalized  = normalize_industry(industry)
+                output[idx] = normalized if normalized else industry
+        return output
+
     except Exception as e:
-        logger.debug("Industry inference failed for %s: %s", company, e)
-        return ""
-
-
+        logger.warning("Batch industry inference failed: %s", e)
+        return [""] * len(companies)
 def run_pipeline() -> dict:
     """
     Run the full lead discovery pipeline.
@@ -186,11 +205,7 @@ def run_pipeline() -> dict:
         if raw_industry:
             lead["industry"] = normalize_industry(raw_industry, gemini)
         else:
-            lead["industry"] = _infer_industry(
-                lead.get("company", ""),
-                lead.get("domain",  ""),
-                gemini,
-            )
+            lead["industry"] = ""  # filled in batch step after scraping
 
         lead = assign_status(lead)
         return lead, "ok"
@@ -243,6 +258,23 @@ def run_pipeline() -> dict:
         "Scraping complete: %d leads found (%d ready, %d needs review)",
         len(all_leads), len(ready_leads), len(review_leads),
     )
+
+    # ------------------------------------------------------------------
+    # Step 2b: Batch infer industries for leads missing it
+    # ------------------------------------------------------------------
+    needs_industry = [l for l in all_leads if not l.get("industry")]
+    if needs_industry and gemini:
+        logger.info("Step 2b: Inferring industry for %d leads...", len(needs_industry))
+        company_domain_pairs = [
+            (l.get("company", ""), l.get("domain", ""))
+            for l in needs_industry
+        ]
+        industries = _batch_infer_industries(company_domain_pairs, gemini)
+        for lead, industry in zip(needs_industry, industries):
+            lead["industry"] = industry
+        logger.info("Industry inference complete")
+    elif needs_industry:
+        logger.warning("Gemini unavailable — industry will be blank for %d leads", len(needs_industry))
 
     # ------------------------------------------------------------------
     # Step 3: Write to Google Sheet

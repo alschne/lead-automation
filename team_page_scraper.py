@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 # Config
 # ---------------------------------------------------------------------------
 
-REQUEST_TIMEOUT = 10          # seconds
+REQUEST_TIMEOUT = 5          # seconds
 REQUEST_DELAY   = 0.5         # seconds between requests to same domain
 USER_AGENT      = (
     "Mozilla/5.0 (compatible; LeadDiscoveryBot/1.0; "
@@ -141,11 +141,15 @@ def _fetch_with_requests(url: str) -> tuple[str | None, int | None]:
             return resp.text, 200
         return None, resp.status_code
     except requests.exceptions.ConnectionError as e:
+        # ConnectTimeoutError comes through as ConnectionError
+        if "timed out" in str(e).lower() or "timeout" in str(e).lower():
+            logger.warning("Timeout for %s", url)
+            return None, 408
         logger.warning("ConnectionError for %s: %s", url, e)
         return None, None
     except requests.exceptions.Timeout:
         logger.warning("Timeout for %s", url)
-        return None, None
+        return None, 408  # use 408 as timeout signal
     except Exception as e:
         logger.warning("Unexpected fetch error for %s (%s): %s", url, type(e).__name__, e)
         return None, None
@@ -296,8 +300,17 @@ def _looks_like_name(text: str) -> bool:
     if any(w.isupper() and len(w) > 1 and not w.endswith(".") for w in words):
         return False
     # Reject if & appears — nav items like "HR & Legal" use & as a separator
-    # Real names rarely contain & (exception: "O'Brien & Associates" type firms handled elsewhere)
     if "&" in text:
+        return False
+    # Reject common non-name phrases that pass capitalization checks
+    non_name_phrases = {
+        "our mission", "our team", "our story", "our vision", "our values",
+        "meet the team", "about us", "learn more", "get started", "contact us",
+        "sign up", "log in", "terms of service", "privacy policy",
+        "read more", "view all", "see more", "join us", "work with us",
+        "who we are", "what we do", "how we work", "why us",
+    }
+    if text.lower().strip() in non_name_phrases:
         return False
     return True
 
@@ -462,12 +475,13 @@ def pick_best_lead(leads: list[dict]) -> dict | None:
     return sorted(leads, key=sort_key)[0]
 
 
-# HTTP status codes that indicate Cloudflare/bot protection (domain-level block)
-# 404 = path doesn't exist (keep trying other paths)
-# 403 = bot detected by Cloudflare (domain-level, all paths blocked)
+# HTTP status codes that indicate domain-level blocks — skip remaining paths
+# 404 = path doesn't exist (keep trying other paths — NOT in this set)
+# 403 = bot detected by Cloudflare (domain-level)
+# 408 = connection timeout (domain is unreachable — all paths will timeout)
 # 429 = rate limited (domain-level)
 # 503 = bot challenge page
-CF_BLOCK_STATUSES = {403, 429, 503}
+CF_BLOCK_STATUSES = {403, 408, 429, 503}
 
 
 def scrape_team_page(domain: str) -> dict | None:
@@ -502,11 +516,15 @@ def scrape_team_page(domain: str) -> dict | None:
         html, status = _fetch_with_requests(url)
 
         if html is None:
-            if status in CF_BLOCK_STATUSES:
+            if status == 408:
+                # Domain is unreachable/dead — stop trying immediately
+                logger.info("Domain unreachable for %s — skipping all paths", domain)
+                break
+            elif status in CF_BLOCK_STATUSES:
                 if not cf_blocked:
                     logger.info("CF block detected for %s (HTTP %s) — limiting Playwright attempts", domain, status)
                     cf_blocked = True
-                # Try Playwright for this path
+                # Try Playwright for this path (Cloudflare can be bypassed with real browser)
                 html = _fetch_with_playwright(url)
                 if not html or _is_cf_blocked(html):
                     time.sleep(REQUEST_DELAY)
