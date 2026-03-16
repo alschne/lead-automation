@@ -312,6 +312,22 @@ def _looks_like_name(text: str) -> bool:
     }
     if text.lower().strip() in non_name_phrases:
         return False
+
+    # Reject if any word is a common non-name word (product/service/generic terms)
+    # Real names don't contain these words
+    non_name_words = {
+        "test", "english", "platform", "app", "application", "service",
+        "services", "system", "systems", "solution", "solutions",
+        "product", "products", "tool", "tools", "software", "technology",
+        "technologies", "network", "networks", "group", "inc", "llc",
+        "corp", "corporation", "company", "global", "international",
+        "management", "operations", "consulting", "media", "digital",
+        "online", "cloud", "data", "analytics", "intelligence",
+    }
+    word_set = {w.lower() for w in words}
+    if word_set & non_name_words:
+        return False
+
     return True
 
 
