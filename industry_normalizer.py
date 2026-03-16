@@ -262,11 +262,9 @@ def _gemini_normalize(raw: str, gemini_client) -> str | None:
     """
     try:
         prompt = _GEMINI_PROMPT.format(raw=raw)
-        response = gemini_client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt,
-        )
-        result = response.text.strip().lower()
+        model    = gemini_client.GenerativeModel("gemini-flash-latest")
+        response = model.generate_content(prompt)
+        result   = response.text.strip().lower()
         # Sanity check: reject if Gemini returns something too long or weird
         if result and len(result.split()) <= 5 and len(result) < 60:
             return result

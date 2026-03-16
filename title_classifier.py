@@ -198,10 +198,8 @@ def _gemini_classify(title: str, gemini_client) -> dict:
     """
     try:
         prompt = _GEMINI_PROMPT.format(title=title)
-        response = gemini_client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt,
-        )
+        model    = gemini_client.GenerativeModel("gemini-flash-latest")
+        response = model.generate_content(prompt)
         raw = response.text.strip()
         # Strip markdown fences if present
         raw = re.sub(r"^```json\s*|```$", "", raw, flags=re.MULTILINE).strip()

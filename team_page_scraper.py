@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 REQUEST_TIMEOUT = 10          # seconds
-REQUEST_DELAY   = 1.5         # seconds between requests to same domain
+REQUEST_DELAY   = 0.5         # seconds between requests to same domain
 USER_AGENT      = (
     "Mozilla/5.0 (compatible; LeadDiscoveryBot/1.0; "
     "respectful scraper; contact: your@email.com)"
@@ -179,8 +179,6 @@ def _fetch_with_playwright(url: str) -> str | None:
             )
             page = context.new_page()
             page.goto(url, timeout=REQUEST_TIMEOUT * 2000, wait_until="domcontentloaded")
-            # Give JS time to render
-            page.wait_for_timeout(2000)
             html = page.content()
             browser.close()
             return html
@@ -464,17 +462,30 @@ def pick_best_lead(leads: list[dict]) -> dict | None:
     return sorted(leads, key=sort_key)[0]
 
 
+# HTTP status codes that indicate Cloudflare/bot protection (domain-level block)
+# 404 = path doesn't exist (keep trying other paths)
+# 403 = bot detected by Cloudflare (domain-level, all paths blocked)
+# 429 = rate limited (domain-level)
+# 503 = bot challenge page
+CF_BLOCK_STATUSES = {403, 429, 503}
+
+
 def scrape_team_page(domain: str) -> dict | None:
     """
     Attempt to scrape leadership/team page for a given domain.
 
     Returns the single best lead dict, or None if nothing found.
+
+    Fast-fail: if the first requests attempt gets a CF block status,
+    try Playwright once on the most likely path then stop — don't
+    burn 14 Playwright launches on a heavily protected domain.
     """
     found_leads = []
     tried_urls  = []
-    seen_content_hashes: set[int] = set()  # detect redirect-to-homepage loops
+    seen_content_hashes: set[int] = set()
+    cf_blocked = False  # track if domain is Cloudflare-protected
 
-    for path in TEAM_PAGE_PATHS:
+    for path_idx, path in enumerate(TEAM_PAGE_PATHS):
         # robots.txt check
         if not _is_allowed(domain, path):
             continue
@@ -482,15 +493,37 @@ def scrape_team_page(domain: str) -> dict | None:
         url = f"https://{domain}{path}"
         tried_urls.append(url)
 
-        html = _fetch_page(url)
-        if not html:
-            time.sleep(REQUEST_DELAY)
-            continue
+        # If CF-blocked, only try Playwright on /about and /team (most likely paths)
+        # then give up — don't waste time on all 14 paths
+        if cf_blocked:
+            if path not in ("/about", "/team"):
+                continue
 
-        # Detect same-content redirect loops (all paths returning homepage)
+        html, status = _fetch_with_requests(url)
+
+        if html is None:
+            if status in CF_BLOCK_STATUSES:
+                if not cf_blocked:
+                    logger.info("CF block detected for %s (HTTP %s) — limiting Playwright attempts", domain, status)
+                    cf_blocked = True
+                # Try Playwright for this path
+                html = _fetch_with_playwright(url)
+                if not html or _is_cf_blocked(html):
+                    time.sleep(REQUEST_DELAY)
+                    continue
+            else:
+                time.sleep(REQUEST_DELAY)
+                continue
+        elif _looks_js_rendered(html) or _is_cf_blocked(html):
+            logger.info("JS-rendered or CF page at %s — trying Playwright", url)
+            pw_html = _fetch_with_playwright(url)
+            if pw_html and not _is_cf_blocked(pw_html):
+                html = pw_html
+
+        # Detect same-content redirect loops
         content_hash = hash(html[:2000])
         if content_hash in seen_content_hashes:
-            logger.info("Duplicate content detected at %s — skipping (redirect loop)", url)
+            logger.info("Duplicate content at %s — skipping", url)
             time.sleep(REQUEST_DELAY)
             continue
         seen_content_hashes.add(content_hash)
@@ -499,7 +532,7 @@ def scrape_team_page(domain: str) -> dict | None:
         if leads:
             found_leads.extend(leads)
             logger.info("Found %d leads at %s", len(leads), url)
-            break  # stop trying paths once we find a working page
+            break
 
         time.sleep(REQUEST_DELAY)
 
@@ -577,7 +610,6 @@ if __name__ == "__main__":
         "reedmfgco.com",
         "thewarrencompany.com",
         "lakeerierubber.com",
-        "mbausa.org",
     ]
 
     if "--diagnose" in sys.argv:
