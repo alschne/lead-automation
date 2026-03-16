@@ -38,9 +38,16 @@ BATCH_SIZE = 30
 
 
 def _get_worksheet() -> gspread.Worksheet:
-    sa_path     = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "service_account.json")
-    sheet_id    = os.getenv("GOOGLE_SHEET_ID")
-    creds       = Credentials.from_service_account_file(sa_path, scopes=SCOPES)
+    import json as _json
+    sa_value = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "service_account.json")
+    sheet_id = os.getenv("GOOGLE_SHEET_ID")
+
+    if sa_value.strip().startswith("{"):
+        sa_info = _json.loads(sa_value)
+        creds   = Credentials.from_service_account_info(sa_info, scopes=SCOPES)
+    else:
+        creds = Credentials.from_service_account_file(sa_value, scopes=SCOPES)
+
     client      = gspread.authorize(creds)
     spreadsheet = client.open_by_key(sheet_id)
     return spreadsheet.worksheet("leads")

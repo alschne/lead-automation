@@ -68,9 +68,24 @@ WRITABLE_COLUMNS = {
 
 
 def _get_sheet_client() -> gspread.Client:
-    """Authenticate and return a gspread client."""
-    sa_path   = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "service_account.json")
-    creds     = Credentials.from_service_account_file(sa_path, scopes=SCOPES)
+    """Authenticate and return a gspread client.
+
+    Handles two cases:
+    - Local dev: GOOGLE_SERVICE_ACCOUNT_JSON is a file path
+    - Cloud Run: GOOGLE_SERVICE_ACCOUNT_JSON is the JSON content as a string
+    """
+    import json as _json
+    sa_value = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "service_account.json")
+
+    # Detect if value is JSON content or a file path
+    if sa_value.strip().startswith("{"):
+        # It's JSON content directly (Cloud Run / Secret Manager)
+        sa_info = _json.loads(sa_value)
+        creds   = Credentials.from_service_account_info(sa_info, scopes=SCOPES)
+    else:
+        # It's a file path (local dev)
+        creds = Credentials.from_service_account_file(sa_value, scopes=SCOPES)
+
     return gspread.authorize(creds)
 
 
