@@ -425,11 +425,50 @@ def _strategy_proximity(soup: BeautifulSoup, domain: str, source_url: str) -> li
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def scrape_team_page(domain: str) -> list[dict]:
+# Seniority sort order — lower number = higher priority
+_ROLE_LEVEL_RANK = {"ceo_founder": 0, "hr_leader": 1, "needs_review": 2}
+_ROLE_CONTEXT_RANK = {
+    "founders and CEOs":      0,
+    "leadership teams":       1,
+    "HR and people leaders":  2,
+    "HR teams":               3,
+    "needs_review":           4,
+}
+
+
+def pick_best_lead(leads: list[dict]) -> dict | None:
+    """
+    Given a list of leads from a single domain, return the single best one.
+    Runs title_classifier inline to get role_level + role_context for sorting.
+    Priority: ceo_founder > hr_leader, then leadership teams > HR and people leaders > HR teams.
+    """
+    if not leads:
+        return None
+    if len(leads) == 1:
+        lead = leads[0]
+        from title_classifier import classify_title
+        result = classify_title(lead["title"])
+        lead.update(result)
+        return lead
+
+    from title_classifier import classify_title
+
+    def sort_key(lead: dict) -> tuple:
+        result = classify_title(lead["title"])
+        lead.update(result)
+        return (
+            _ROLE_LEVEL_RANK.get(result["role_level"], 99),
+            _ROLE_CONTEXT_RANK.get(result["role_context"], 99),
+        )
+
+    return sorted(leads, key=sort_key)[0]
+
+
+def scrape_team_page(domain: str) -> dict | None:
     """
     Attempt to scrape leadership/team page for a given domain.
 
-    Returns a list of lead dicts (may be empty if nothing found or blocked).
+    Returns the single best lead dict, or None if nothing found.
     """
     found_leads = []
     tried_urls  = []
@@ -449,7 +488,7 @@ def scrape_team_page(domain: str) -> list[dict]:
             continue
 
         # Detect same-content redirect loops (all paths returning homepage)
-        content_hash = hash(html[:2000])  # hash first 2000 chars as fingerprint
+        content_hash = hash(html[:2000])
         if content_hash in seen_content_hashes:
             logger.info("Duplicate content detected at %s — skipping (redirect loop)", url)
             time.sleep(REQUEST_DELAY)
@@ -466,8 +505,12 @@ def scrape_team_page(domain: str) -> list[dict]:
 
     if not found_leads:
         logger.warning("No leads found for %s (tried %d paths)", domain, len(tried_urls))
+        return None
 
-    return found_leads
+    best = pick_best_lead(found_leads)
+    logger.info("Best lead for %s: %s %s — %s", domain,
+                best["first_name"], best["last_name"], best["title"])
+    return best
 
 
 # ---------------------------------------------------------------------------
@@ -534,6 +577,7 @@ if __name__ == "__main__":
         "reedmfgco.com",
         "thewarrencompany.com",
         "lakeerierubber.com",
+        "mbausa.org",
     ]
 
     if "--diagnose" in sys.argv:
@@ -546,16 +590,17 @@ if __name__ == "__main__":
             print(f"\n{'='*60}")
             print(f"Scraping: {domain}")
             print('='*60)
-            leads = scrape_team_page(domain)
-            all_results[domain] = leads
-            if leads:
-                for lead in leads:
-                    print(f"  {lead['first_name']} {lead['last_name']} — {lead['title']}")
+            lead = scrape_team_page(domain)
+            all_results[domain] = lead
+            if lead:
+                print(f"  {lead['first_name']} {lead['last_name']} — {lead['title']}")
+                print(f"  role_level: {lead.get('role_level', 'unclassified')}  role_context: {lead.get('role_context', 'unclassified')}  confidence: {lead.get('confidence', '?')}")
             else:
-                print("  No leads extracted.")
+                print("  No lead extracted.")
 
         print(f"\n{'='*60}")
         print("SUMMARY")
         print('='*60)
-        for domain, leads in all_results.items():
-            print(f"  {domain:<35} {len(leads)} leads")
+        for domain, lead in all_results.items():
+            result = f"{lead['first_name']} {lead['last_name']} — {lead['title']}" if lead else "no lead"
+            print(f"  {domain:<35} {result}")
