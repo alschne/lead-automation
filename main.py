@@ -46,12 +46,13 @@ logging.getLogger("google").setLevel(logging.WARNING)
 # Imports (after logging setup)
 # ---------------------------------------------------------------------------
 
-from hackernews_discovery import discover_companies as hn_discover
-from team_page_scraper    import scrape_team_page
-from industry_normalizer  import normalize_industry
-from confidence_gate      import assign_status, gate_leads
-from sheet_writer         import write_leads
-from notifier             import send_review_notification
+from hackernews_discovery  import discover_companies as hn_discover
+from team_page_scraper     import scrape_team_page
+from hunter_enrichment     import enrich_failed_domains
+from industry_normalizer   import normalize_industry
+from confidence_gate       import assign_status, gate_leads
+from sheet_writer          import write_leads
+from notifier              import send_review_notification
 
 
 # ---------------------------------------------------------------------------
@@ -210,9 +211,10 @@ def run_pipeline() -> dict:
         lead = assign_status(lead)
         return lead, "ok"
 
-    all_leads    = []
-    ready_leads  = []
-    review_leads = []
+    all_leads      = []
+    ready_leads    = []
+    review_leads   = []
+    failed_domains: list[tuple[str, str]] = []  # (domain, company) where scraper found nothing
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {
@@ -231,6 +233,11 @@ def run_pipeline() -> dict:
             if status == "error":
                 stats["errors"] += 1
             if not lead:
+                # Track for Hunter enrichment fallback
+                company_name = futures[future].get("company", "") if future in futures else ""
+                domain_val = futures[future].get("domain", "") if future in futures else ""
+                if domain_val:
+                    failed_domains.append((domain_val, company_name))
                 continue
 
             stats["leads_found"] += 1
@@ -260,11 +267,52 @@ def run_pipeline() -> dict:
     )
 
     # ------------------------------------------------------------------
-    # Step 2b: Batch infer industries for leads missing it
+    # Step 2b: Hunter enrichment for domains where scraper failed
+    # ------------------------------------------------------------------
+    if failed_domains:
+        # Filter out domains already in the sheet — don't spend Hunter credits on them
+        from sheet_writer import _get_sheet_client, _get_leads_worksheet
+        try:
+            client    = _get_sheet_client()
+            worksheet = _get_leads_worksheet(client)
+            existing_records = worksheet.get_all_records()
+            existing_domains = {
+                str(r.get("domain", "")).lower().strip()
+                for r in existing_records
+                if r.get("domain")
+            }
+            fresh_failed = [
+                (d, c) for d, c in failed_domains
+                if d.lower().strip() not in existing_domains
+            ]
+            logger.info(
+                "Step 2b: Hunter enrichment for %d domains (%d skipped — already in sheet)...",
+                len(fresh_failed), len(failed_domains) - len(fresh_failed),
+            )
+            failed_domains = fresh_failed
+        except Exception as e:
+            logger.warning("Could not pre-filter Hunter domains against sheet: %s — proceeding anyway", e)
+            fresh_failed = failed_domains
+
+        hunter_leads = enrich_failed_domains(failed_domains)
+        for lead in hunter_leads:
+            lead["source"]     = "hunter"
+            lead["lead_source"] = "hunter"
+            lead = assign_status(lead)
+            all_leads.append(lead)
+            if lead["status"] == "ready_to_send":
+                ready_leads.append(lead)
+            else:
+                review_leads.append(lead)
+            stats["leads_found"] += 1
+        logger.info("Hunter enrichment added %d leads", len(hunter_leads))
+
+    # ------------------------------------------------------------------
+    # Step 2c: Batch infer industries for leads missing it
     # ------------------------------------------------------------------
     needs_industry = [l for l in all_leads if not l.get("industry")]
     if needs_industry and gemini:
-        logger.info("Step 2b: Inferring industry for %d leads...", len(needs_industry))
+        logger.info("Step 2c: Inferring industry for %d leads...", len(needs_industry))
         company_domain_pairs = [
             (l.get("company", ""), l.get("domain", ""))
             for l in needs_industry

@@ -162,6 +162,42 @@ def classify_title(title: str, gemini_client=None) -> dict:
     }
 
 
+
+# ---------------------------------------------------------------------------
+# Title pre-filter — used by scraper and Hunter enrichment
+# ---------------------------------------------------------------------------
+
+SENIORITY_SIGNALS = [
+    r"\bceo\b", r"\bfounder\b", r"\bowner\b", r"\bpresident\b",
+    r"\bchief\b", r"\bvice\s+president\b", r"\bvp\b",
+    r"\bdirector\b", r"\bmanaging\s+director\b",
+    r"\bpartner\b", r"\bprincipal\b",
+    r"\bhead\s+of\b", r"\blead\b", r"\bmanager\b",
+]
+
+HR_SIGNALS = [
+    r"\b(hr|h\.r\.)\b", r"\bhrbp\b", r"\bhuman\s+resources\b",
+    r"\bpeople\b", r"\btalent\b", r"\bcompensation\b",
+    r"\btotal\s+rewards\b", r"\brecruiting\b", r"\brecruitment\b",
+    r"\bbenefits\b", r"\bworkforce\b", r"\bdiversity\b",
+    r"\bdei\b", r"\binclusion\b",
+]
+
+ALL_TITLE_SIGNALS = SENIORITY_SIGNALS + HR_SIGNALS
+
+
+def should_extract_lead(title: str) -> bool:
+    """
+    Returns True if the title contains at least one seniority or HR/people signal.
+    Titles with no signal (Software Engineer, Account Executive, etc.) return False.
+    Used as a pre-filter before full classification.
+    """
+    normalized = title.lower().strip()
+    for pattern in ALL_TITLE_SIGNALS:
+        if re.search(pattern, normalized):
+            return True
+    return False
+
 # ---------------------------------------------------------------------------
 # Gemini fallback
 # ---------------------------------------------------------------------------

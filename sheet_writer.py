@@ -61,9 +61,11 @@ LEADS_COLUMNS = [
 ]
 
 # Columns we populate — rest are left blank for cold email pipeline
+# email and verification_result are populated when Hunter provides them
 WRITABLE_COLUMNS = {
     "first_name", "last_name", "company", "domain", "industry",
     "role_level", "role_context", "title", "status",
+    "email", "verification_result",
 }
 
 
