@@ -4,44 +4,55 @@ Planned improvements in rough priority order.
 
 ## High priority
 
-### Hunter.io enrichment
-Use Hunter's free API (25 searches/month) to find verified email addresses and people at discovered domains before falling back to team page scraping. Hunter returns name + title + email in one call — higher quality than scraping.
-
-Module: `hunter_enrichment.py`
-Flow: domain → Hunter API → lead with email → skip scraper for that domain
-
 ### CommonCrawl discovery
-Query CommonCrawl's CDX index for company domains at scale. Only free source with enough volume to support daily runs. Complex to build but high ceiling.
+Query CommonCrawl's CDX index for company domains at scale. Only remaining free source with enough volume to significantly increase weekly lead count. Complex to build but high ceiling — could yield hundreds of additional domains per run.
 
 Module: `commoncrawl_discovery.py`
-Approach: CDX API query for pages matching team/leadership URL patterns
+Approach: CDX API query for URLs matching team/leadership page patterns, extract root domains, feed into enrichment chain
 
 ### Switch to daily schedule
-Currently weekly because HackerNews is the only source. Once CommonCrawl or job boards are added, switch Cloud Scheduler from `0 21 * * 6` to `0 21 * * *`.
+Currently weekly because HackerNews is the only automated discovery source. Once CommonCrawl is added, switch Cloud Scheduler from `0 21 * * 6` to `0 21 * * *` for daily runs.
+Update: `gcloud scheduler jobs update http lead-automation-weekly --schedule="0 21 * * *"`
 
 ## Medium priority
 
 ### Company size filtering
-Add a signal-based size filter — scrape LinkedIn or Crunchbase (carefully) to verify 30-200 employee range before enrichment. Currently large companies occasionally slip through.
+Add signal-based size filter to verify 30-200 employee range before enrichment. Currently large companies occasionally slip through, especially from CSV imports.
 
 ### Job board discovery
-Greenhouse, Lever, Ashby, Workable sitemaps are dead. Research current public endpoints or seed lists to find active companies on each ATS platform.
+Greenhouse, Lever, Ashby, Workable sitemaps are dead as of 2025. Research current public endpoints or seed lists to find active companies on each ATS platform. May require maintaining a curated company token list.
 
-### Google Custom Search fallback
-Google deprecated "Search entire web" for new Programmable Search Engines in January 2026. Revisit if Google restores this capability or an alternative emerges. Would help find non-standard team page URLs like `/en/contact-reed/company-directory`.
+### Snov.io / Skrapp.io enrichment
+Both have free tiers (50-100 credits/month) but **API access requires paid plans** on both platforms as of 2026. Only viable as manual CSV exports — same workflow as Apollo/Hunter. Build CSV parsers for each if you decide to use their UIs.
+
+### Apollo API enrichment
+Apollo's People Search API (`/api/v1/mixed_people/api_search`) requires a paid plan — not accessible on free tier as of 2026. If you upgrade Apollo, the `apollo_discovery.py` module is already written and ready to use. People Match endpoint (email enrichment) uses 75 credits/month on free tier.
 
 ## Low priority
-
-### Apollo CSV ingestor
-Build an ingestor for Apollo.io CSV exports. Apollo free trial gives 25 high-quality contacts. Even as a one-time boost, worth having an automated ingestor ready.
-
-Module: `apollo_csv_ingestor.py`
 
 ### Multi-contact per domain
 Currently takes only the best lead per domain. Once sending volume is higher and reputation is established, consider adding 2-3 contacts per company for higher conversion probability.
 
 ### Lead source analytics
-Add a `lead_source` tracking column to the sheet and build a simple weekly report showing which source produces the most leads, most replies, and most booked calls.
+Track which source produces the most replies and booked calls. Add a simple monthly report.
+
+### Google Custom Search fallback
+Google deprecated "Search entire web" for new Programmable Search Engines in January 2026. Revisit if Google restores this capability. Would help find non-standard team page URLs.
 
 ### Playwright performance
-Playwright is the slowest part of the pipeline (~60% of runtime). Investigate using a headless browser pool or cached session to reduce startup overhead per domain.
+Playwright is the slowest part of the pipeline. Investigate browser pooling or cached sessions to reduce per-domain startup overhead.
+
+### Automated Hunter/Apollo exports
+Both platforms have paid API tiers that would allow fully automated monthly exports. Currently requires manual UI work at the start of each month. Worth the cost if you scale beyond free tier limits.
+
+## Completed
+- ✅ HackerNews Who's Hiring discovery
+- ✅ Team page scraper (requests + Playwright fallback)
+- ✅ Title classifier (deterministic rules + Gemini fallback)
+- ✅ Industry normalizer (rule-based + Gemini batch inference)
+- ✅ Confidence gate (ready_to_send vs needs_review)
+- ✅ Sheet writer with dedup
+- ✅ Daily notification email
+- ✅ Hunter API enrichment (25 searches/month, fallback for scraper failures)
+- ✅ CSV ingestor for Hunter and Apollo manual exports via Google Drive
+- ✅ Cloud Run + Cloud Scheduler deployment (Saturday 9pm Mountain)
