@@ -4,8 +4,7 @@
 
 - Python 3.13+
 - Google Cloud SDK (`gcloud`)
-- Docker (optional — Cloud Build handles building)
-- A Google Sheet shared with the service account
+- A Google Sheet shared with the service account (same sheet as cold email pipeline)
 
 ## Local development setup
 
@@ -25,22 +24,43 @@ playwright install chromium
 
 ### 3. Create service account
 
-1. GCP Console → IAM & Admin → Service Accounts
+1. GCP Console → lead-automation-490322 → IAM & Admin → Service Accounts
 2. Create service account: `lead-automation-sheets`
 3. Role: Basic → Editor
 4. Keys tab → Add Key → JSON → download
 5. Move to repo root, rename to `service_account.json`
 6. Share your Google Sheet with the service account's `client_email`
 
-### 4. Create `.env`
+### 4. Create Google Drive folders
+
+1. Go to Google Drive
+2. Create folder: `Lead Imports`
+3. Inside it create two subfolders: `hunter` and `apollo`
+4. Share both subfolders with your service account `client_email`
+5. Get folder IDs from the URL when you open each folder:
+   `drive.google.com/drive/folders/FOLDER_ID_HERE`
+
+### 5. Create `.env`
 
 ```bash
 cp .env.example .env
 ```
 
-Fill in all values — see `.env.example` for required keys.
+Fill in all values. Required keys:
 
-### 5. Run locally
+```
+GOOGLE_SHEET_ID=
+GOOGLE_SERVICE_ACCOUNT_JSON=service_account.json
+GEMINI_API_KEY=
+HUNTER_API_KEY=
+HUNTER_IMPORT_FOLDER_ID=
+APOLLO_IMPORT_FOLDER_ID=
+ZOHO_SMTP_USER=
+ZOHO_SMTP_PASSWORD=
+NOTIFICATION_EMAIL=
+```
+
+### 6. Run locally
 
 ```bash
 python3 main.py
@@ -58,7 +78,8 @@ gcloud services enable \
   artifactregistry.googleapis.com \
   cloudscheduler.googleapis.com \
   secretmanager.googleapis.com \
-  cloudbuild.googleapis.com
+  cloudbuild.googleapis.com \
+  drive.googleapis.com
 ```
 
 ### Create Artifact Registry repo
@@ -81,6 +102,9 @@ gcloud builds submit \
 ```bash
 echo -n "VALUE" | gcloud secrets create GOOGLE_SHEET_ID --data-file=-
 echo -n "VALUE" | gcloud secrets create GEMINI_API_KEY --data-file=-
+echo -n "VALUE" | gcloud secrets create HUNTER_API_KEY --data-file=-
+echo -n "VALUE" | gcloud secrets create HUNTER_IMPORT_FOLDER_ID --data-file=-
+echo -n "VALUE" | gcloud secrets create APOLLO_IMPORT_FOLDER_ID --data-file=-
 echo -n "VALUE" | gcloud secrets create ZOHO_SMTP_USER --data-file=-
 echo -n "VALUE" | gcloud secrets create ZOHO_SMTP_PASSWORD --data-file=-
 echo -n "VALUE" | gcloud secrets create NOTIFICATION_EMAIL --data-file=-
@@ -105,7 +129,7 @@ gcloud run jobs create lead-automation-pipeline \
   --memory=1Gi \
   --cpu=1 \
   --max-retries=0 \
-  --set-secrets=GOOGLE_SHEET_ID=GOOGLE_SHEET_ID:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest,ZOHO_SMTP_USER=ZOHO_SMTP_USER:latest,ZOHO_SMTP_PASSWORD=ZOHO_SMTP_PASSWORD:latest,NOTIFICATION_EMAIL=NOTIFICATION_EMAIL:latest,GOOGLE_SERVICE_ACCOUNT_JSON=GOOGLE_SERVICE_ACCOUNT_JSON:latest
+  --set-secrets=GOOGLE_SHEET_ID=GOOGLE_SHEET_ID:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest,HUNTER_API_KEY=HUNTER_API_KEY:latest,HUNTER_IMPORT_FOLDER_ID=HUNTER_IMPORT_FOLDER_ID:latest,APOLLO_IMPORT_FOLDER_ID=APOLLO_IMPORT_FOLDER_ID:latest,ZOHO_SMTP_USER=ZOHO_SMTP_USER:latest,ZOHO_SMTP_PASSWORD=ZOHO_SMTP_PASSWORD:latest,NOTIFICATION_EMAIL=NOTIFICATION_EMAIL:latest,GOOGLE_SERVICE_ACCOUNT_JSON=GOOGLE_SERVICE_ACCOUNT_JSON:latest
 ```
 
 ### Create Cloud Scheduler trigger

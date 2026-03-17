@@ -6,35 +6,50 @@ Automatically discovers companies and extracts decision-maker leads, writing the
 
 Runs every Saturday at 9pm Mountain Time via Google Cloud Run + Cloud Scheduler. It:
 
-1. Discovers companies from HackerNews "Who is Hiring?" monthly thread
-2. Scrapes each company's team/leadership page for decision-makers
-3. Classifies each lead by role level and role context
-4. Infers industry using Gemini AI
-5. Writes qualified leads to the Google Sheet with `status = ready_to_send`
-6. Flags low-confidence leads as `needs_review`
-7. Sends a daily summary email with any leads needing manual review
+1. **Step 0:** Ingests any CSV files dropped in Google Drive (Hunter/Apollo exports)
+2. **Step 1:** Discovers companies from HackerNews "Who is Hiring?" monthly thread
+3. **Step 2:** Scrapes each company's team/leadership page for decision-makers
+4. **Step 2b:** Runs Hunter API enrichment on domains where scraper found nothing
+5. **Step 2c:** Infers industry for all leads using batched Gemini AI
+6. **Step 3:** Writes qualified leads to Google Sheet (dedup handled automatically)
+7. **Step 4:** Sends daily summary email (includes needs_review leads if any)
 
 ## Lead flow
 
 ```
-HackerNews → company domains
-    ↓
-Team page scraper → name + title
-    ↓
-Title classifier → role_level + role_context
-    ↓
-Industry normalizer → industry label
-    ↓
-Confidence gate → ready_to_send or needs_review
-    ↓
-Google Sheet (same sheet as cold email pipeline)
+CSV imports (Hunter/Apollo)          HackerNews
+        ↓                                ↓
+   CSV ingestor                    Company domains
+        ↓                                ↓
+  Title classifier             Team page scraper
+  Industry normalizer                   ↓
+  Confidence gate           Hunter API (fallback)
+        ↓                                ↓
+        │                     Title classifier
+        │                     Industry normalizer
+        │                     Confidence gate
+        │                                ↓
+        └────────────────────────────────┘
+                                    ↓
+                    Google Sheet (ready_to_send or needs_review)
+                                    ↓
+                           Notification email
 ```
+
+## Lead sources
+
+| Source | Type | Leads/month | Automated |
+|---|---|---|---|
+| Apollo CSV export | Manual import | ~75 | Drop in Drive |
+| Hunter CSV export | Manual import | ~50 | Drop in Drive |
+| HackerNews scraper | Automated discovery | ~40 | ✅ |
+| Hunter API enrichment | Automated enrichment | ~25 | ✅ |
 
 ## Target leads
 
 - **Role levels:** CEO, Founder, President, VP, Director, Manager, HR/People leaders
-- **Company size:** 30–200 employees (signal-based, not hard-filtered)
-- **Industries:** Broad — any company with employees that may need compensation analytics help
+- **Company size:** 30–200 employees (signal-based)
+- **Industries:** Broad — any company that may need compensation analytics
 
 ## Repository structure
 
@@ -43,36 +58,40 @@ lead_automation/
 ├── main.py                   # Orchestration
 ├── hackernews_discovery.py   # HackerNews Who's Hiring parser
 ├── team_page_scraper.py      # requests + Playwright scraper
+├── hunter_enrichment.py      # Hunter API domain search fallback
+├── csv_ingestor.py           # Hunter/Apollo CSV import from Google Drive
 ├── title_classifier.py       # Deterministic role_level + role_context rules
 ├── industry_normalizer.py    # Industry label normalization + Gemini fallback
 ├── confidence_gate.py        # Assigns ready_to_send vs needs_review status
 ├── sheet_writer.py           # Dedup check + Google Sheet insert
 ├── notifier.py               # Zoho SMTP notification emails
-├── backfill_industry.py      # One-time script — delete after use
 ├── Dockerfile
 ├── requirements.txt
 ├── .env.example
 ├── .gitignore
 ├── README.md
 ├── SETUP.md
-└── MAINTENANCE.md
+├── MAINTENANCE.md
+└── BACKLOG.md
 ```
 
 ## Google Sheet columns written
 
 | Column | Value |
 |---|---|
-| first_name | From scraper |
-| last_name | From scraper |
-| company | From scraper / discovery |
+| first_name | From scraper / CSV |
+| last_name | From scraper / CSV |
+| company | From scraper / CSV |
 | domain | From discovery |
 | industry | Inferred by Gemini |
 | role_level | From title_classifier |
 | role_context | From title_classifier |
-| title | From scraper |
+| title | From scraper / CSV |
+| email | From Hunter API or CSV (when available) |
+| verification_result | From Hunter / CSV verification status |
 | status | ready_to_send or needs_review |
 
-All other columns (email, personalization, send dates, etc.) are filled by the cold email pipeline.
+All other columns are filled by the cold email pipeline.
 
 ## GCP setup
 
