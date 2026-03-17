@@ -47,6 +47,7 @@ logging.getLogger("google").setLevel(logging.WARNING)
 # ---------------------------------------------------------------------------
 
 from hackernews_discovery  import discover_companies as hn_discover
+from csv_ingestor          import ingest_csvs
 from team_page_scraper     import scrape_team_page
 from hunter_enrichment     import enrich_failed_domains
 from industry_normalizer   import normalize_industry
@@ -137,6 +138,20 @@ def run_pipeline() -> dict:
     logger.info("=" * 55)
     logger.info("Lead Discovery Pipeline starting")
     logger.info("=" * 55)
+
+    # ------------------------------------------------------------------
+    # Step 0: Ingest any CSV files dropped in Google Drive folders
+    # ------------------------------------------------------------------
+    logger.info("Step 0: Checking for CSV imports (Hunter/Apollo)...")
+    try:
+        csv_summary = ingest_csvs()
+        for source, result in csv_summary.items():
+            logger.info(
+                "CSV ingest (%s): %d inserted, %d duplicates skipped",
+                source, result.get("inserted", 0), result.get("skipped_duplicate", 0),
+            )
+    except Exception as e:
+        logger.warning("CSV ingest failed: %s — continuing pipeline", e)
 
     gemini = _get_gemini_client()
     stats  = {

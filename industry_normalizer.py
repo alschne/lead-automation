@@ -231,6 +231,78 @@ INDUSTRY_MAP: dict[str, list[str]] = {
         "iot",
         "internet of things",
     ],
+    "public safety": [
+        "public safety",
+        "law enforcement",
+        "emergency services",
+        "security services",
+    ],
+    "defense": [
+        "defense & space",
+        "defense and space",
+        "defense",
+        "aerospace",
+        "military",
+    ],
+    "facilities services": [
+        "facilities services",
+        "facilities management",
+        "building services",
+        "property services",
+    ],
+    "industrial engineering": [
+        "mechanical or industrial engineering",
+        "mechanical engineering",
+        "industrial engineering",
+        "engineering services",
+    ],
+    "gaming": [
+        "computer games",
+        "video games",
+        "gaming",
+        "game development",
+    ],
+    "renewable energy": [
+        "renewables & environment",
+        "renewables and environment",
+        "renewable energy",
+        "clean energy",
+        "clean tech",
+        "cleantech",
+        "sustainability",
+    ],
+    "health and wellness": [
+        "health, wellness & fitness",
+        "health wellness & fitness",
+        "health and wellness",
+        "wellness",
+        "fitness",
+    ],
+    "consumer services": [
+        "consumer services",
+        "consumer goods",
+        "direct to consumer",
+        "dtc",
+    ],
+    "wholesale": [
+        "wholesale",
+        "wholesale trade",
+        "distribution",
+        "wholesale distribution",
+    ],
+    "marketing technology": [
+        "marketing technology",
+        "martech",
+        "adtech",
+        "ad tech",
+    ],
+    "data analytics": [
+        "data analytics",
+        "analytics",
+        "business intelligence",
+        "data science",
+        "big data",
+    ],
 }
 
 
