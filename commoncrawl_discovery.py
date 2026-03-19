@@ -36,7 +36,7 @@ REQUEST_DELAY     = 5.0    # polite delay — CDX server is rate limited, be pat
 URLS_PER_DOMAIN   = 50     # max URLs to fetch per domain lookup
 
 # Required per CommonCrawl FAQ — RFC 9110 compliant User-Agent
-CDX_USER_AGENT = "LeadAutomationBot/1.0 (respectful single-threaded crawler; contact: your@email.com)"
+CDX_USER_AGENT = "LeadAutomationBot/1.0 (respectful single-threaded crawler; contact: allieroth@alineanalytics.com)"
 
 # Path keywords that suggest a team/people/leadership page
 TEAM_PATH_SIGNALS = [
@@ -76,33 +76,55 @@ def _get_latest_crawl_id() -> str | None:
 
 def _looks_like_team_page(url: str) -> bool:
     """
-    Returns True if a URL path looks like it could contain people/team info.
+    Returns True if a URL path segment exactly matches a team/people signal word.
+    Requires the signal to be a complete path segment — not buried in a longer word.
+
+    /about/          → True  (segment: 'about')
+    /leadership/     → True  (segment: 'leadership')
+    /our-team/       → True  (segment: 'our-team')
+    /events/leadership-panel/  → False  (segment is 'leadership-panel', not 'leadership')
+    /blog/building-a-team/     → False  (segment is 'building-a-team')
     """
     try:
         path = urlparse(url).path.lower().strip("/")
         if not path:
             return False
-        # Check each path segment against our signal words
-        segments = re.split(r"[/\-_]", path)
-        for signal in TEAM_PATH_SIGNALS:
-            if signal in segments or signal in path:
+
+        # Split into path segments only (by /)
+        segments = [s for s in path.split("/") if s]
+
+        for segment in segments:
+            # Check if this segment exactly matches or is exactly a signal word
+            # Allow hyphens: our-team, meet-the-team
+            clean = segment.strip("-_")
+            if clean in TEAM_PATH_SIGNALS:
                 return True
+            # Also check hyphenated combos that start with a signal
+            # e.g. "our-team" → split by hyphen → ["our", "team"] → "team" matches
+            parts = re.split(r"[-_]", clean)
+            for part in parts:
+                if part in TEAM_PATH_SIGNALS:
+                    # Only count it if the segment is SHORT (2-3 words max)
+                    # Avoids matching 'team' in long blog-post-about-building-a-team
+                    if len(parts) <= 3:
+                        return True
+
         return False
     except Exception:
         return False
 
 
-def find_team_page_url(domain: str, crawl_id: str | None = None) -> str | None:
+def find_team_page_url(domain: str, crawl_id: str | None = None) -> list[str]:
     """
-    Query CommonCrawl for all indexed URLs on a domain and find the best
-    team/leadership page URL.
+    Query CommonCrawl for all indexed URLs on a domain and find candidate
+    team/leadership page URLs, sorted by likelihood (shortest path first).
 
     Args:
         domain:   Company domain e.g. "reedmfgco.com"
         crawl_id: Specific crawl to use. None = latest.
 
     Returns:
-        A URL string if a team page is found, None otherwise.
+        List of candidate URL strings, sorted best first. Empty list if none found.
     """
     if not crawl_id:
         crawl_id = _get_latest_crawl_id()
@@ -126,15 +148,19 @@ def find_team_page_url(domain: str, crawl_id: str | None = None) -> str | None:
 
         if resp.status_code == 429 or "SlowDown" in resp.text:
             logger.warning("CommonCrawl rate limit for %s — skipping", domain)
-            return None
+            return []
+
+        if resp.status_code == 400:
+            logger.debug("CommonCrawl bad request for %s — skipping", domain)
+            return []
 
         if resp.status_code == 404 or "No Captures" in resp.text:
             logger.debug("CommonCrawl has no data for %s", domain)
-            return None
+            return []
 
-        if resp.status_code != 200:
+        if resp.status_code not in (200, 204):
             logger.warning("CDX returned %s for %s", resp.status_code, domain)
-            return None
+            return []
 
         # Parse URLs from response
         candidate_urls = []
@@ -154,50 +180,52 @@ def find_team_page_url(domain: str, crawl_id: str | None = None) -> str | None:
             logger.debug("No team page URLs found in CommonCrawl for %s", domain)
             return None
 
-        # Score candidates — prefer shorter paths (less likely to be individual profile pages)
+        # Sort by path depth — prefer shorter paths (closer to root = more likely to be a team page)
         def path_score(url: str) -> int:
             path = urlparse(url).path
-            # Prefer paths with team signal words near the root
-            depth = len([s for s in path.split("/") if s])
-            return depth
+            return len([s for s in path.split("/") if s])
 
-        best = sorted(candidate_urls, key=path_score)[0]
-        logger.info("CommonCrawl found team page for %s: %s", domain, best)
-        return best
+        sorted_urls = sorted(candidate_urls, key=path_score)
+        logger.info(
+            "CommonCrawl found %d candidate team URLs for %s: %s",
+            len(sorted_urls), domain,
+            [urlparse(u).path for u in sorted_urls[:3]],
+        )
+        return sorted_urls  # return all candidates, caller tries each
 
     except Exception as e:
         logger.warning("CommonCrawl lookup failed for %s: %s", domain, e)
-        return None
+        return []
 
 
 def enrich_failed_domains(
     failed_domains: list[tuple[str, str]],
     crawl_id: str | None = None,
-) -> list[str]:
+) -> list[tuple[str, list[str]]]:
     """
     For each domain where the scraper failed, ask CommonCrawl if it knows
-    a team page URL we haven't tried yet.
+    any team page URLs we haven't tried yet.
 
     Args:
         failed_domains: List of (domain, company_name) tuples
         crawl_id:       Specific crawl to use. None = latest.
 
     Returns:
-        List of (domain, team_page_url) tuples where CommonCrawl found something.
-        These should be passed to the scraper to try the specific URL.
+        List of (domain, [candidate_urls]) tuples where CommonCrawl found URLs.
+        Caller should try each URL in order until a lead is found.
     """
     if not failed_domains:
         return []
 
     results = []
     for domain, company in failed_domains:
-        url = find_team_page_url(domain, crawl_id)
-        if url:
-            results.append((domain, url))
+        urls = find_team_page_url(domain, crawl_id)
+        if urls:
+            results.append((domain, urls))
         time.sleep(REQUEST_DELAY)
 
     logger.info(
-        "CommonCrawl enrichment: %d/%d domains had team page URLs",
+        "CommonCrawl enrichment: %d/%d domains had candidate team page URLs",
         len(results), len(failed_domains),
     )
     return results
@@ -229,7 +257,14 @@ if __name__ == "__main__":
     print("-" * 80)
 
     for domain, company in test_domains:
-        url = find_team_page_url(domain, crawl_id)
-        result = url if url else "No team page found in CommonCrawl"
+        urls = find_team_page_url(domain, crawl_id)
+        if urls:
+            result = f"{len(urls)} URL(s): {urlparse(urls[0]).path}"
+            if len(urls) > 1:
+                result += f", {urlparse(urls[1]).path}"
+                if len(urls) > 2:
+                    result += f" (+{len(urls)-2} more)"
+        else:
+            result = "No team page found in CommonCrawl"
         print(f"  {domain:<28} {result}")
         time.sleep(REQUEST_DELAY)

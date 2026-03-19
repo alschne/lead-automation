@@ -48,6 +48,7 @@ logging.getLogger("google").setLevel(logging.WARNING)
 
 from hackernews_discovery  import discover_companies as hn_discover
 from csv_ingestor          import ingest_csvs
+from commoncrawl_discovery import enrich_failed_domains as cc_enrich
 from team_page_scraper     import scrape_team_page
 from hunter_enrichment     import enrich_failed_domains
 from industry_normalizer   import normalize_industry
@@ -282,38 +283,91 @@ def run_pipeline() -> dict:
     )
 
     # ------------------------------------------------------------------
-    # Step 2b: Hunter enrichment for domains where scraper failed
+    # Step 2b: Pre-filter failed domains against existing sheet
+    # Removes domains already in sheet before any enrichment runs
     # ------------------------------------------------------------------
     if failed_domains:
-        # Filter out domains already in the sheet — don't spend Hunter credits on them
         from sheet_writer import _get_sheet_client, _get_leads_worksheet
         try:
-            client    = _get_sheet_client()
-            worksheet = _get_leads_worksheet(client)
+            client           = _get_sheet_client()
+            worksheet        = _get_leads_worksheet(client)
             existing_records = worksheet.get_all_records()
             existing_domains = {
                 str(r.get("domain", "")).lower().strip()
                 for r in existing_records
                 if r.get("domain")
             }
-            fresh_failed = [
+            before = len(failed_domains)
+            failed_domains = [
                 (d, c) for d, c in failed_domains
                 if d.lower().strip() not in existing_domains
             ]
             logger.info(
-                "Step 2b: Hunter enrichment for %d domains (%d skipped — already in sheet)...",
-                len(fresh_failed), len(failed_domains) - len(fresh_failed),
+                "Step 2b: Pre-filter complete — %d domains to enrich (%d skipped, already in sheet)",
+                len(failed_domains), before - len(failed_domains),
             )
-            failed_domains = fresh_failed
         except Exception as e:
-            logger.warning("Could not pre-filter Hunter domains against sheet: %s — proceeding anyway", e)
-            fresh_failed = failed_domains
+            logger.warning("Pre-filter failed: %s — proceeding with all failed domains", e)
 
-        hunter_leads = enrich_failed_domains(failed_domains)
+    # ------------------------------------------------------------------
+    # Step 2c: CommonCrawl URL lookup (free, runs before Hunter)
+    # For domains where scraper found nothing, ask CommonCrawl if it
+    # knows the actual team page URL, then scrape that specific URL.
+    # ------------------------------------------------------------------
+    cc_found_domains: set[str] = set()
+    if failed_domains:
+        logger.info("Step 2c: CommonCrawl URL lookup for %d domains...", len(failed_domains))
+        from team_page_scraper import _fetch_page, _parse_leads, pick_best_lead
+        cc_results = cc_enrich(failed_domains)
+        for domain, candidate_urls in cc_results:
+            company = next((c for d, c in failed_domains if d == domain), "")
+            lead_found = False
+            for team_url in candidate_urls:
+                if lead_found:
+                    break
+                try:
+                    html = _fetch_page(team_url)
+                    if not html:
+                        continue
+                    raw_leads = _parse_leads(html, domain, team_url)
+                    lead      = pick_best_lead(raw_leads)
+                    if not lead:
+                        continue
+                    lead["company"]     = lead.get("company") or company
+                    lead["source"]      = "commoncrawl"
+                    lead["lead_source"] = "commoncrawl"
+                    lead["industry"]    = ""  # filled in batch step
+                    lead                = assign_status(lead)
+                    all_leads.append(lead)
+                    cc_found_domains.add(domain)
+                    if lead["status"] == "ready_to_send":
+                        ready_leads.append(lead)
+                    else:
+                        review_leads.append(lead)
+                    stats["leads_found"] += 1
+                    lead_found = True
+                    logger.info("CommonCrawl lead: %s %s — %s (%s)",
+                                lead["first_name"], lead["last_name"],
+                                lead["title"], domain)
+                except Exception as e:
+                    logger.warning("CommonCrawl scrape failed for %s at %s: %s", domain, team_url, e)
+        logger.info("CommonCrawl enrichment complete — %d leads found", len(cc_found_domains))
+
+    # ------------------------------------------------------------------
+    # Step 2d: Hunter API — last resort, only for domains that failed
+    # scraper AND CommonCrawl. Conserves monthly credit budget.
+    # ------------------------------------------------------------------
+    still_failed = [
+        (d, c) for d, c in failed_domains
+        if d not in cc_found_domains
+    ]
+    if still_failed:
+        logger.info("Step 2d: Hunter enrichment for %d domains...", len(still_failed))
+        hunter_leads = enrich_failed_domains(still_failed)
         for lead in hunter_leads:
-            lead["source"]     = "hunter"
+            lead["source"]      = "hunter"
             lead["lead_source"] = "hunter"
-            lead = assign_status(lead)
+            lead                = assign_status(lead)
             all_leads.append(lead)
             if lead["status"] == "ready_to_send":
                 ready_leads.append(lead)
@@ -323,11 +377,11 @@ def run_pipeline() -> dict:
         logger.info("Hunter enrichment added %d leads", len(hunter_leads))
 
     # ------------------------------------------------------------------
-    # Step 2c: Batch infer industries for leads missing it
+    # Step 2e: Batch infer industries for leads missing it
     # ------------------------------------------------------------------
     needs_industry = [l for l in all_leads if not l.get("industry")]
     if needs_industry and gemini:
-        logger.info("Step 2c: Inferring industry for %d leads...", len(needs_industry))
+        logger.info("Step 2e: Inferring industry for %d leads...", len(needs_industry))
         company_domain_pairs = [
             (l.get("company", ""), l.get("domain", ""))
             for l in needs_industry
