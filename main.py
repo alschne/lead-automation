@@ -50,7 +50,7 @@ from hackernews_discovery  import discover_companies as hn_discover
 from csv_ingestor          import ingest_csvs
 from commoncrawl_discovery import enrich_failed_domains as cc_enrich
 from team_page_scraper     import scrape_team_page
-from hunter_enrichment     import enrich_failed_domains
+from hunter_enrichment     import enrich_failed_domains, get_credit_usage
 from industry_normalizer   import normalize_industry
 from confidence_gate       import assign_status, gate_leads
 from sheet_writer          import write_leads
@@ -154,7 +154,8 @@ def run_pipeline() -> dict:
     except Exception as e:
         logger.warning("CSV ingest failed: %s — continuing pipeline", e)
 
-    gemini = _get_gemini_client()
+    gemini          = _get_gemini_client()
+    hunter_credits  = None  # populated after Hunter step if Hunter runs
     stats  = {
         "companies_discovered": 0,
         "domains_scraped":      0,
@@ -375,6 +376,10 @@ def run_pipeline() -> dict:
                 review_leads.append(lead)
             stats["leads_found"] += 1
         logger.info("Hunter enrichment added %d leads", len(hunter_leads))
+        hunter_credits = get_credit_usage()
+        if hunter_credits:
+            logger.info("Hunter credits: %d used, %d remaining",
+                        hunter_credits["used"], hunter_credits["remaining"])
 
     # ------------------------------------------------------------------
     # Step 2e: Batch infer industries for leads missing it
@@ -422,7 +427,7 @@ def run_pipeline() -> dict:
     # Step 4: Send notification email
     # ------------------------------------------------------------------
     logger.info("Step 4: Sending notification email...")
-    _send_notification(review_leads, write_summary)
+    _send_notification(review_leads, write_summary, hunter_credits)
 
     # ------------------------------------------------------------------
     # Final summary
@@ -442,10 +447,10 @@ def run_pipeline() -> dict:
     return stats
 
 
-def _send_notification(review_leads: list[dict], write_summary: dict):
+def _send_notification(review_leads: list[dict], write_summary: dict, hunter_credits: dict | None = None):
     """Send daily notification email — always fires."""
     try:
-        sent = send_review_notification(review_leads, write_summary)
+        sent = send_review_notification(review_leads, write_summary, hunter_credits)
         if sent:
             logger.info("Notification email sent")
         else:

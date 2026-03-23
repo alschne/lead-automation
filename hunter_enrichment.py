@@ -83,6 +83,37 @@ def _check_remaining_credits() -> int | None:
         return None
 
 
+def get_credit_usage() -> dict | None:
+    """
+    Get Hunter credit usage details for the notification email.
+    Returns dict with used, available, remaining or None on failure.
+    Free — does not consume a credit.
+    """
+    api_key = _get_api_key()
+    if not api_key:
+        return None
+    try:
+        resp = requests.get(
+            f"{HUNTER_API_BASE}/account",
+            params={"api_key": api_key},
+            timeout=REQUEST_TIMEOUT,
+        )
+        resp.raise_for_status()
+        data          = resp.json()
+        requests_obj  = data.get("data", {}).get("requests", {})
+        searches      = requests_obj.get("searches", {})
+        used          = searches.get("used", 0)
+        available     = searches.get("available", 0)
+        return {
+            "used":      used,
+            "available": available,
+            "remaining": available - used,
+        }
+    except Exception as e:
+        logger.warning("Failed to fetch Hunter credit usage: %s", e)
+        return None
+
+
 def domain_search(domain: str) -> list[dict]:
     """
     Search Hunter for all known contacts at a domain.
