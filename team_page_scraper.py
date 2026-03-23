@@ -282,6 +282,17 @@ def _looks_like_name(text: str) -> bool:
         "sign up", "log in", "terms of service", "privacy policy",
         "read more", "view all", "see more", "join us", "work with us",
         "who we are", "what we do", "how we work", "why us",
+        # Job listing / navigation section headers
+        "after hours", "open positions", "current openings", "job openings",
+        "available positions", "career opportunities", "view openings",
+        "apply now", "no openings", "all positions", "full time",
+        "part time", "remote only", "work here", "now hiring",
+        # Generic page sections
+        "recent posts", "related posts", "latest news", "press releases",
+        "case studies", "white papers", "success stories", "client stories",
+        "our clients", "our partners", "our services", "our products",
+        "our work", "our culture", "our offices", "office locations",
+        "get in touch", "stay connected", "follow us", "subscribe now",
     }
     if text.lower().strip() in non_name_phrases:
         return False

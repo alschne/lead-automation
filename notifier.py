@@ -26,6 +26,7 @@ SMTP_PORT = 465
 def send_review_notification(
     needs_review: list[dict],
     run_summary: dict,
+    hunter_credits: dict | None = None,
 ) -> bool:
     """
     Send a notification email summarizing leads that need manual review.
@@ -55,7 +56,7 @@ def send_review_notification(
         subject = f"Lead Discovery: {review_count} lead(s) need review — {date.today().isoformat()}"
     else:
         subject = f"Lead Discovery: run complete — {date.today().isoformat()}"
-    body    = _build_body(needs_review, run_summary, sheet_url)
+    body    = _build_body(needs_review, run_summary, sheet_url, hunter_credits)
 
     try:
         msg = MIMEMultipart()
@@ -80,8 +81,16 @@ def _build_body(
     needs_review: list[dict],
     run_summary: dict,
     sheet_url: str,
+    hunter_credits: dict | None = None,
 ) -> str:
     """Build the plain text email body."""
+
+    hunter_line = ""
+    if hunter_credits:
+        used      = hunter_credits.get("used", "?")
+        available = hunter_credits.get("available", "?")
+        remaining = hunter_credits.get("remaining", "?")
+        hunter_line = f"  Hunter credits:        {used} used / {available} total ({remaining} remaining)"
 
     lines = [
         f"Lead Discovery Run — {date.today().isoformat()}",
@@ -93,8 +102,10 @@ def _build_body(
         f"  Skipped (duplicate):   {run_summary.get('skipped_duplicate', 0)}",
         f"  Ready to send:         {run_summary.get('inserted', 0) - len(needs_review)}",
         f"  Needs review:          {len(needs_review)}",
-        "",
     ]
+    if hunter_line:
+        lines.append(hunter_line)
+    lines.append("")
 
     if needs_review:
         lines += [
